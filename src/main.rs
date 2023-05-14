@@ -2,22 +2,12 @@
 struct Task {
     id: u16,
     name: String,
-    duration: u8,
-    assigned_member: Option<u16>,
-    start_time: Option<u16>,
-    finish_time: Option<u16>,
+    duration: u16,
 }
 
 impl Task {
-    pub fn new(id: u16, name: String, duration: u8) -> Self {
-        Self {
-            id,
-            name,
-            duration,
-            assigned_member: None,
-            start_time: None,
-            finish_time: None,
-        }
+    pub fn new(id: u16, name: String, duration: u16) -> Self {
+        Self { id, name, duration }
     }
 }
 
@@ -25,23 +15,11 @@ impl Task {
 struct Member {
     id: u16,
     name: String,
-    assigned_tasks: Vec<u16>,
-    assignable_from: u16,
 }
 
 impl Member {
     pub fn new(id: u16, name: String) -> Self {
-        Self {
-            id,
-            name,
-            assigned_tasks: vec![],
-            assignable_from: 0,
-        }
-    }
-
-    pub fn assign(&mut self, task: &Task) {
-        self.assigned_tasks.push(task.id);
-        self.assignable_from = self.assignable_from + task.duration as u16
+        Self { id, name }
     }
 }
 
@@ -60,7 +38,7 @@ impl Project {
         }
     }
 
-    pub fn add_task(&mut self, name: String, duration: u8) {
+    pub fn add_task(&mut self, name: String, duration: u16) {
         let id = self.tasks.len();
         let task = Task::new(id as u16, name, duration);
         self.tasks.push(task)
@@ -73,27 +51,80 @@ impl Project {
     }
 }
 
+struct TaskSchedule {
+    task_id: u16,
+    duration: u16,
+    assigned_member: Option<u16>,
+    start_time: Option<u16>,
+    finish_time: Option<u16>,
+}
+
+impl TaskSchedule {
+    pub fn from(task: &Task) -> Self {
+        Self {
+            task_id: task.id,
+            duration: task.duration,
+            assigned_member: None,
+            start_time: None,
+            finish_time: None,
+        }
+    }
+}
+
+struct MemberSchedule {
+    member_id: u16,
+    assigned_tasks: Vec<u16>,
+    assignable_from: u16,
+}
+
+impl MemberSchedule {
+    pub fn from(member: &Member) -> Self {
+        Self {
+            member_id: member.id,
+            assigned_tasks: vec![],
+            assignable_from: 0,
+        }
+    }
+}
+
+struct ProjectSchedule {
+    task_schedules: Vec<TaskSchedule>,
+    member_schedules: Vec<MemberSchedule>,
+    duration: u16,
+}
+
 struct Scheduler {}
 
 impl Scheduler {
-    pub fn create_schedule(project: &mut Project) {
+    pub fn create_schedule(project: &Project) -> ProjectSchedule {
+        let mut task_schedules: Vec<TaskSchedule> =
+            project.tasks.iter().map(TaskSchedule::from).collect();
+        let mut member_schedules: Vec<MemberSchedule> =
+            project.members.iter().map(MemberSchedule::from).collect();
         // TODO: 偏りが生じる
-        for task in project
-            .tasks
-            .iter_mut()
-            .filter(|task| task.assigned_member.is_none())
-        {
-            project.members.sort_by_key(|m| m.assignable_from);
-            let assignee: &mut Member = project.members.first_mut().unwrap();
+        for task in task_schedules.iter_mut() {
+            member_schedules.sort_by_key(|m| m.assignable_from);
+            let assignee: &mut MemberSchedule = member_schedules.first_mut().unwrap();
             Self::assign(task, assignee);
+        }
+        ProjectSchedule {
+            task_schedules,
+            member_schedules,
+            duration: project.duration,
         }
     }
 
-    fn assign(task: &mut Task, member: &mut Member) {
-        task.assigned_member = Some(member.id);
-        task.start_time = Some(member.assignable_from as u16);
-        member.assign(task);
-        task.finish_time = Some(member.assignable_from as u16 - 1);
+    fn assign(task: &mut TaskSchedule, member: &mut MemberSchedule) {
+        task.assigned_member = Some(member.member_id);
+        member.assigned_tasks.push(task.task_id);
+
+        let start_time: u16 = member.assignable_from;
+        let finish_time: u16 = start_time + task.duration - 1;
+
+        task.start_time = Some(start_time);
+        task.finish_time = Some(finish_time);
+
+        member.assignable_from = finish_time + 1;
     }
 }
 
@@ -102,23 +133,25 @@ struct GanttChart {
 }
 
 impl GanttChart {
-    pub fn from(project: &Project) -> GanttChart {
+    pub fn from(schedule: &ProjectSchedule) -> GanttChart {
         let mut timelines: Vec<Vec<String>> = vec![];
-        for member in project.members.iter() {
+        for member in schedule.member_schedules.iter() {
             let mut timeline: Vec<String> = vec![];
-            let assigned_task = member
-                .assigned_tasks
-                .iter()
-                .map(|task_id| project.tasks.iter().find(|t| &t.id == task_id));
+            let assigned_task = member.assigned_tasks.iter().map(|task_id| {
+                schedule
+                    .task_schedules
+                    .iter()
+                    .find(|t| &t.task_id == task_id)
+            });
             for task in assigned_task {
                 while timeline.len() < task.unwrap().start_time.unwrap() as usize {
                     timeline.push("-".to_string())
                 }
                 for _ in 0..task.unwrap().duration {
-                    timeline.push(task.unwrap().id.to_string())
+                    timeline.push(task.unwrap().task_id.to_string())
                 }
             }
-            while timeline.len() < project.duration as usize {
+            while timeline.len() < schedule.duration as usize {
                 timeline.push("-".to_string())
             }
             timelines.push(timeline);
@@ -144,8 +177,8 @@ fn main() {
     project.add_member("member2".to_string());
     project.add_member("member3".to_string());
 
-    Scheduler::create_schedule(&mut project);
+    let schedule = Scheduler::create_schedule(&project);
 
-    let gantt_chart = GanttChart::from(&project);
+    let gantt_chart = GanttChart::from(&schedule);
     gantt_chart.display();
 }
